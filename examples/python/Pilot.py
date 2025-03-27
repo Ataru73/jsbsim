@@ -12,7 +12,7 @@ airspeeds = []
 def main():
     # Initialize JSBSim
     sim = jsbsim.FGFDMExec('../..')
-    sim.load_model('737')  # Load the B747 model
+    sim.load_model('f15')  # Load the B747 model
     # sim.load_model('A320')  # Load the A320 model
     sim.set_dt(DT)  # Set the simulation time step to DT seconds
 
@@ -26,55 +26,61 @@ def main():
         sim.set_output_directive('data_output/flightgear.xml')
         
 
-    # Set initial conditions
-    sim['ic/h-sl-ft'] = 10  # Initial altitude in feet
-    sim['ic/terrain-elevation-ft'] = 0  # Terrain elevation in feet
-    sim['ic/vc-kts'] = 0  # Initial airspeed in knots
-    sim['ic/psi-true-deg'] = 0  # Initial heading in degrees
-    sim['ic/gamma-deg'] = 0  # Initial flight path angle in degrees
-    sim['ic/alpha-deg'] = 0  # Initial angle of attack in degrees
-
-    # Set latitude and longitude to the runway of Milano Linate (example values)
-    lat = 45.4937
-    lon = 8.5612
-
-    # Get today's date as an integer representing the day of the year
-    today_date = datetime.datetime.now().timetuple().tm_yday
+    # Set latitude and longitude to the runway of Pratica di Mare
+    lat = 41.658
+    lon = 12.446
 
     # Set initial conditions for JSBSim
-    sim['ic/date'] = today_date
-    sim['ic/lat-gc-deg'] = lat      # Example latitude (e.g., San Francisco)
-    sim['ic/lon-gc-deg'] = lon    # Example longitude (e.g., San Francisco)
-    sim['ic/elev'] = 108          # Example elevation in meters
-    sim['ic/hdg'] = 174           # Example heading in degrees
-    sim['ic/time-sec'] = 12 * 3600
+    sim['ic/lat-gc-deg'] = lat      # Latitude of Pratica di Mare
+    sim['ic/long-gc-deg'] = lon      # Longitude of Pratica di Mare
+    sim['ic/terrain-elevation-ft'] = 160  # Flat terrain
+    # sim['ic/h-sl-ft'] = 50             # Start at 50 ft above sea level
+    sim['ic/h-agl-ft'] = 5            # Match altitude above ground level    sim['ic/psi-true-deg'] = 310.5  # Heading in degrees
+    # sim['ic/altitude-ft'] = 39      # Altitude in feet
+    sim['ic/altitude-gnd-ft'] = 10     # Ground altitude in feet
+    sim['ic/psi-true-deg'] = 178.0  # Heading in degrees
 
     # Initialize the simulation
     sim.run_ic()
 
     # Example commands to control the aircraft
+    # commands = [
+    #     {'time': 10.0, 'fcs/steer-cmd-norm': 0.5},
+    #     {'time': 10.0, 'fcs/elevator-cmd-norm': 0.5},
+    #     {'time': 12.0, 'fcs/steer-cmd-norm': 0},
+    #     {'time': 15.0, 'fcs/flap-cmd-norm': 0.3},
+    #     {'time': 16.0, 'fcs/break-cmd-norm': 0.0},
+    #     {'time': 20.0, 'propulsion/starter_cmd': 1},
+    #     {'time': 25.0, 'propulsion/cutoff_cmd': 0},
+    #     {'time': 25.0, 'fcs/throttle-cmd-norm[0]': 1.0},
+    #     {'time': 25.0, 'fcs/throttle-cmd-norm[1]': 1.0},
+    #     {'time': 30.0, 'fcs/elevator-cmd-norm': 0.5},
+    #     {'time': 150.0, 'fcs/elevator-cmd-norm': -0.1},
+    #     {'time': 130.0, 'fcs/flap-cmd-norm': 0.1},
+    #     {'time': 180.0, 'gear/gear-cmd-norm': 0},
+    #     {'time': 200.0, 'pressurize-cmd': 1},
+    #     {'time': 200.0, 'fcs/throttle-cmd-norm[0]': 0.9},
+    #     {'time': 200.0, 'fcs/throttle-cmd-norm[1]': 0.9},
+    #     {'time': 200.0, 'fcs/flap-cmd-norm': 0},
+    #     {'time': 200.0, 'fcs/ele-cmd-norm': 0.2},
+    #     {'time': 210.0, 'fcs/elevator-cmd-norm': 1.0},
+    #     {'time': 275.0, 'fcs/leveling-cmd-norm': 0}
+    # ]
+
     commands = [
-        {'time': 10.0, 'fcs/steer-cmd-norm': 0.5},
-        {'time': 10.0, 'fcs/elevator-cmd-norm': 0.5},
-        {'time': 12.0, 'fcs/steer-cmd-norm': 0},
-        {'time': 12.0, 'fcs/elevator-cmd-norm': 0},
-        {'time': 15.0, 'fcs/flap-cmd-norm': 0.3},
-        {'time': 16.0, 'fcs/break-cmd-norm': 0.0},
-        {'time': 20.0, 'propulsion/starter_cmd': 1},
-        {'time': 25.0, 'propulsion/cutoff_cmd': 0},
-        {'time': 25.0, 'fcs/throttle-cmd-norm[0]': 1.0},
-        {'time': 25.0, 'fcs/throttle-cmd-norm[1]': 1.0},
-        # {'time': 55.0, 'fcs/steer-cmd-norm': 1},
-        # {'time': 60.0, 'fcs/steer-cmd-norm': 0},
-        {'time': 110.0, 'fcs/elevator-cmd-norm': -0.2}, 
-        {'time': 130.0, 'fcs/flap-cmd-norm': 0.1},
-        {'time': 180.0, 'gear/gear-cmd-norm': 0},
-        {'time': 200.0, 'pressurize-cmd': 1},
-        {'time': 200.0, 'fcs/throttle-cmd-norm[0]': 0.9},
-        {'time': 200.0, 'fcs/throttle-cmd-norm[1]': 0.9},
-        {'time': 200.0, 'fcs/flap-cmd-norm': 0},
-        {'time': 200.0, 'fcs/ele-cmd-norm': 0.2},
-        {'time': 275.0, 'fcs/leveling-cmd-norm': 0}
+        {'time': 0.1, 'fcs/flap-cmd-norm': 0.3},  # Deploy flaps for takeoff
+        {'time': 0.2, 'fcs/break-cmd-norm': 0.0},  # Release brakes
+        {'time': 0.3, 'propulsion/starter_cmd': 1},  # Start engines
+        {'time': 0.4, 'propulsion/cutoff_cmd': 0},  # Ensure engines are running
+        {'time': 1.0, 'fcs/throttle-cmd-norm[0]': 1.0},  # Full throttle for takeoff
+        {'time': 1.0, 'fcs/throttle-cmd-norm[1]': 1.0},
+        {'time': 10.0, 'fcs/elevator-cmd-norm': -0.5},  # Pitch up for takeoff
+        # {'time': 40.0, 'fcs/elevator-cmd-norm': 0.0},  # Reduce pitch for climb
+        {'time': 45.0, 'fcs/flap-cmd-norm': 0.0},  # Retract flaps
+        {'time': 46.0, 'gear/gear-cmd-norm': 0},  # Retract landing gear
+        {'time': 47.0, 'fcs/throttle-cmd-norm[0]': 0.5, 'fcs/throttle-cmd-norm[1]': 0.5},  # Half throttle for climb
+        {'time': 50.0, 'ap/heading_hold': 1, 'ap/heading_setpoint': 180, 'ap/altitude_hold': 1, 'ap/altitude_setpoint': 2500},  
+        {'time': 60.0, 'fcs/elevator-cmd-norm': -0.05}
     ]
 
     # sort commands by time
@@ -83,7 +89,7 @@ def main():
     command_index = 0
     loop_counter = 0
     sim_time = 0.0
-    total_time = 400.0
+    total_time = 100.0
     command = ""
     while sim_time < total_time:
         if command_index < len(commands) and command == "":
@@ -99,13 +105,22 @@ def main():
                     sim.do_trim(value)
             command = ""
 
+        if sim['position/h-sl-ft'] > 10000:
+            if sim['attitude/pitch-rad'] > 0.0:
+                pass 
+                # sim['fcs/elevator-cmd-norm'] = -0.05
+            elif sim['attitude/pitch-rad'] < 0.0:
+                sim['fcs/elevator-cmd-norm'] = 0.05
+
         # Run the simulation for one time step
         sim.run()
         sim_time = sim.get_sim_time()
 
         # Print the current state of the aircraft
         if loop_counter % 100 == 0:
-            print(f"Time: {sim.get_sim_time():.2f}, Altitude: {sim['position/h-sl-ft']:.2f}, Airspeed: {sim['velocities/vc-kts']:.2f}") 
+            print(f"Time: {sim.get_sim_time():.2f}, Altitude: {sim['position/h-sl-ft']:.2f}, Airspeed: {sim['velocities/vc-kts']:.2f}")
+            print(f"Pitch: {sim['attitude/pitch-rad']:.2f}, Roll: {sim['attitude/roll-rad']:.2f}, Yaw: {sim['attitude/heading-true-rad']:.2f}")
+            print()
 
         loop_counter += 1
 
