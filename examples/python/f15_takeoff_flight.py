@@ -140,7 +140,7 @@ def run_simulation():
             # Start engines
             fdm['propulsion/starter_cmd'] = 1
             
-        if sim_time >= 0.4:
+        if sim_time >= 0.4 and not engines_started:
             # Ensure engines are running
             fdm['propulsion/cutoff_cmd'] = 0
             engines_started = True
@@ -162,10 +162,12 @@ def run_simulation():
             fdm['fcs/elevator-cmd-norm'] = -0.4  # Strong back pressure for rotation
             current_phase = PHASE_ROTATION
             print(f"[{sim_time:5.1f}s] Rotation at {current_airspeed:.1f} kts")
-            if current_altitude > 20:  # 20 feet AGL - airborne
-                airborne = True
-                current_phase = PHASE_INITIAL_CLIMB
-                print(f"[{sim_time:5.1f}s] Airborne at {current_airspeed:.1f} kts")
+            
+        # Check if airborne (separate from rotation to ensure it gets checked every frame)
+        if takeoff_roll_started and not airborne and current_altitude > 20:  # 20 feet AGL - airborne
+            airborne = True
+            current_phase = PHASE_INITIAL_CLIMB
+            print(f"[{sim_time:5.1f}s] Airborne at {current_airspeed:.1f} kts")
                 
         # Gear and flap retraction after takeoff
         if airborne and sim_time >= 45.0 and not flaps_retracted:
@@ -269,12 +271,12 @@ def run_simulation():
             roll_rate = fdm['velocities/p-rad_sec'] * 57.2958  # Convert to deg/sec
             
             # Heavy filtering on roll rate (much stronger)
-            filtered_roll_rate = roll_rate * 0.05 + previous_roll_rate * 0.95
+            filtered_roll_rate = roll_rate * 0.02 + previous_roll_rate * 0.98
             
             # Very conservative PID control parameters for maximum stability
-            kp_roll = 0.001  # Very low proportional gain
-            kd_roll = 0.001  # Very low derivative gain
-            ki_roll = 0.002  # Very low integral gain
+            kp_roll = 0.01  # Very low proportional gain
+            kd_roll = -0.01  # Very low derivative gain
+            ki_roll = 0.02  # Very low integral gain
 
             # Only apply control for significant roll angles to avoid over-correction
             if abs(roll_angle) > 2.0:  # Dead zone for small angles
@@ -380,11 +382,20 @@ def create_plots(data):
     axes[0,2].grid(True, alpha=0.3)
     axes[0,2].legend()
     
-    # Plot 4: Heading
-    axes[1,0].plot(times, data['heading'], 'purple', linewidth=2)
+    # Plot 4: Heading (convert from 0-360° to -180° to +180° range)
+    heading_converted = []
+    for h in data['heading']:
+        if h > 180:
+            heading_converted.append(h - 360)
+        else:
+            heading_converted.append(h)
+    
+    axes[1,0].plot(times, heading_converted, 'purple', linewidth=2)
     axes[1,0].set_ylabel('Heading (degrees)')
-    axes[1,0].set_title('Aircraft Heading')
+    axes[1,0].set_title('Aircraft Heading (-180° to +180°)')
     axes[1,0].grid(True, alpha=0.3)
+    axes[1,0].set_ylim(-180, 180)
+    axes[1,0].set_yticks([-180, -90, 0, 90, 180])
     
     # Plot 5: Engine throttles
     axes[1,1].plot(times, data['throttle_1'], 'g-', linewidth=2, label='Engine 1')
