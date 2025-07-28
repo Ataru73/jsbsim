@@ -105,9 +105,11 @@ def run_simulation():
     flaps_retracted = False
     
     # Control system state variables for stability
-    previous_roll_angle = 0.0
+    previous_roll_rate = 0.0
     roll_integral = 0.0
     aileron_filter = 0.0
+    aileron_command_history = [0.0] * 10  # Rolling average buffer
+    last_aileron_cmd = 0.0  # Track previous aileron command for rate limiting
     
     print(f"\nStarting F15 simulation...")
     print("=" * 50)
@@ -257,21 +259,57 @@ def run_simulation():
             rudder_cmd = max(-0.5, min(0.5, rudder_cmd))
             fdm['fcs/rudder-cmd-norm'] = rudder_cmd
             
-            # Enhanced wing leveler with stability improvements
+            # Ultra-stable wing leveler with extreme filtering
             roll_angle = fdm['attitude/phi-deg']
             roll_rate = fdm['velocities/p-rad_sec'] * 57.2958  # Convert to deg/sec
             
-            # More aggressive roll control with rate damping
-            aileron_cmd = -roll_angle * 0.05  # Increased gain for better response
-            aileron_cmd += -roll_rate * 0.01  # Add roll rate damping
+            # Heavy filtering on roll rate (much stronger)
+            filtered_roll_rate = roll_rate * 0.05 + previous_roll_rate * 0.95
             
-            # Additional stability for level flight phase
-            if sim_time >= 70.0:
-                # More aggressive roll correction during level flight
-                aileron_cmd = -roll_angle * 0.08 - roll_rate * 0.02
+            # Very conservative PID control parameters for maximum stability
+            kp_roll = 0.005  # Very low proportional gain
+            kd_roll = 0.001  # Very low derivative gain
+            ki_roll = 0.0002  # Very low integral gain
             
-            # Limit aileron command
-            aileron_cmd = max(-0.8, min(0.8, aileron_cmd))
+            # Only apply control for significant roll angles to avoid over-correction
+            if abs(roll_angle) > 2.0:  # Dead zone for small angles
+                # Calculate integral term (with very tight limits)
+                roll_integral += roll_angle * DT
+                roll_integral = max(-5.0, min(5.0, roll_integral))  # Very tight integral windup
+                
+                # PID aileron command calculation
+                aileron_cmd = -(kp_roll * roll_angle + kd_roll * filtered_roll_rate + ki_roll * roll_integral)
+            else:
+                # No correction for small angles - let natural stability handle it
+                aileron_cmd = 0.0
+                roll_integral *= 0.99  # Slowly decay integral when not correcting
+            
+            # Add to rolling average buffer for even more smoothing
+            aileron_command_history.pop(0)  # Remove oldest
+            aileron_command_history.append(aileron_cmd)  # Add newest
+            
+            # Use rolling average of commands
+            aileron_cmd = sum(aileron_command_history) / len(aileron_command_history)
+            
+            # Multiple stages of low-pass filtering
+            aileron_filter = aileron_cmd * 0.1 + aileron_filter * 0.9  # Very heavy filtering
+            aileron_cmd = aileron_filter
+            
+            # Very conservative limits
+            aileron_cmd = max(-0.2, min(0.2, aileron_cmd))  # Much smaller limits
+            
+            # Rate limiting - prevent rapid changes
+            max_change = 0.01  # Maximum change per step
+            if aileron_cmd > last_aileron_cmd + max_change:
+                aileron_cmd = last_aileron_cmd + max_change
+            elif aileron_cmd < last_aileron_cmd - max_change:
+                aileron_cmd = last_aileron_cmd - max_change
+            
+            last_aileron_cmd = aileron_cmd  # Store for next iteration
+            
+            # Update state variables
+            previous_roll_rate = filtered_roll_rate
+            
             fdm['fcs/aileron-cmd-norm'] = aileron_cmd
         
         # Run simulation step
@@ -353,12 +391,12 @@ def create_plots(data):
     
     # Plot 6: Flight controls
     axes[1,2].plot(times, data['elevator'], 'b-', linewidth=2, label='Elevator')
-    axes[1,2].plot(times, data['aileron'], 'r-', linewidth=2, label='Aileron')
+    axes[1,2].plot(times, data['aileron'], 'r-', linewidth=2, label='Aileron (Ultra-Stable)')
     axes[1,2].plot(times, data['flaps'], 'brown', linewidth=1, alpha=0.7, label='Flaps')
-    axes[1,2].axhline(y=0.8, color='red', linestyle='--', alpha=0.5, label='Aileron Limit')
-    axes[1,2].axhline(y=-0.8, color='red', linestyle='--', alpha=0.5)
+    axes[1,2].axhline(y=0.2, color='red', linestyle='--', alpha=0.5, label='Aileron Limit')
+    axes[1,2].axhline(y=-0.2, color='red', linestyle='--', alpha=0.5)
     axes[1,2].set_ylabel('Control Position')
-    axes[1,2].set_title('Flight Controls (with Enhanced Roll Stability)')
+    axes[1,2].set_title('Flight Controls (with Ultra-Stable Roll Control)')
     axes[1,2].grid(True, alpha=0.3)
     axes[1,2].legend()
     
