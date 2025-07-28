@@ -104,16 +104,11 @@ def run_simulation():
     gear_retracted = False
     flaps_retracted = False
     
-    # Control system state variables for stability
-    previous_roll_rate = 0.0
-    roll_integral = 0.0
-    aileron_filter = 0.0
-    aileron_command_history = [0.0] * 10  # Rolling average buffer
-    last_aileron_cmd = 0.0  # Track previous aileron command for rate limiting
-
-    # --- Altitude PID controller state ---
+    # --- Controller State Variables ---
     altitude_pid_integral = 0.0
     altitude_pid_prev_error = 0.0
+    filtered_roll_rate_dps = 0.0 # State for the roll rate filter
+    filtered_roll_angle_deg = 0.0 # State for the roll angle filter
     
     print(f"\nStarting F15 simulation...")
     print("=" * 50)
@@ -189,8 +184,6 @@ def run_simulation():
         # Manual flight control throughout the simulation
         if airborne:
             # Get current flight parameters
-            pitch_angle = fdm['attitude/theta-deg']
-            roll_angle = fdm['attitude/phi-deg']
             altitude_rate = fdm['velocities/h-dot-fps']
             
             # Determine flight phase and set target altitude
@@ -210,7 +203,6 @@ def run_simulation():
             altitude_error = target_altitude - current_altitude
             airspeed_error = target_airspeed - current_airspeed
 
-
             # PID gains (tune as needed)
             kp_alt = -0.0007  # Proportional gain
             ki_alt = 0.00001  # Integral gain
@@ -218,111 +210,74 @@ def run_simulation():
 
             # PID calculations
             altitude_pid_integral += altitude_error * DT
-            # Anti-windup
-            altitude_pid_integral = max(-2000, min(2000, altitude_pid_integral))
-            altitude_pid_derivative = (altitude_error - altitude_pid_prev_error) / DT
-
+            altitude_pid_integral = max(-2000, min(2000, altitude_pid_integral)) # Anti-windup
+            
             # PID output
             elevator_cmd = (
                 kp_alt * altitude_error
                 + ki_alt * altitude_pid_integral
-                + kd_alt * (-altitude_rate)  # Use negative altitude rate as derivative
+                + kd_alt * (-altitude_rate)
             )
-
-            # Save for next iteration
             altitude_pid_prev_error = altitude_error
-
-            # Limit elevator command
             elevator_cmd = max(-0.6, min(0.3, elevator_cmd))
             fdm['fcs/elevator-cmd-norm'] = elevator_cmd
             
             # Throttle control for airspeed and climb
-            if altitude_error > 1000:  # Need to climb rapidly
-                throttle_cmd = 1.0  # Full afterburner for climb
+            if altitude_error > 1000:
+                throttle_cmd = 1.0
             elif airspeed_error > 50:
-                # Need more speed
-                throttle_cmd = 0.9  # High power for acceleration
+                throttle_cmd = 0.9
             elif airspeed_error > -20 or altitude_error > 100:
-                # Maintain speed or slight climb
-                if sim_time >= 70.0:
-                    throttle_cmd = 0.8  # High power for level flight
-                else:
-                    throttle_cmd = 0.7  # Good power for climb
+                throttle_cmd = 0.8 if sim_time >= 70.0 else 0.7
             else:
-                # Reduce speed - but maintain minimum power for control
-                throttle_cmd = 0.6  # Higher minimum for fighter jet
+                throttle_cmd = 0.6
                 
             fdm['fcs/throttle-cmd-norm[0]'] = throttle_cmd
             fdm['fcs/throttle-cmd-norm[1]'] = throttle_cmd
             
             # Simple heading hold
             heading_error = 180.0 - fdm['attitude/psi-deg']
-            if heading_error > 180:
-                heading_error -= 360
-            elif heading_error < -180:
-                heading_error += 360
-                
-            rudder_cmd = heading_error * 0.01
-            rudder_cmd = max(-0.5, min(0.5, rudder_cmd))
+            if heading_error > 180: heading_error -= 360
+            elif heading_error < -180: heading_error += 360
+            rudder_cmd = max(-0.5, min(0.5, heading_error * 0.01))
             fdm['fcs/rudder-cmd-norm'] = rudder_cmd
             
-            # Ultra-stable wing leveler with extreme filtering
-            roll_angle = fdm['attitude/phi-deg']
-            roll_rate = fdm['velocities/p-rad_sec'] * 57.2958  # Convert to deg/sec
+            # ====================================================================
+            # === FILTERED PD WING LEVELER (FINAL STABLE VERSION) - REV 3      ===
+            # ====================================================================
+            # High-frequency chatter indicated derivative term was amplifying noise.
+            # This version adds a low-pass filter to the roll rate signal before
+            # it's used by the controller, ensuring smooth and stable corrections.
             
-            # Heavy filtering on roll rate (much stronger)
-            filtered_roll_rate = roll_rate * 0.02 + previous_roll_rate * 0.98
-            
-            # Very conservative PID control parameters for maximum stability
-            kp_roll = 0.01  # Very low proportional gain
-            kd_roll = -0.01  # Very low derivative gain
-            ki_roll = 0.02  # Very low integral gain
+            # Get current roll angle and raw roll rate
+            roll_angle_deg = fdm['attitude/phi-deg']
+            raw_roll_rate_dps = fdm['velocities/p-rad_sec'] * 57.2958
 
-            # Only apply control for significant roll angles to avoid over-correction
-            if abs(roll_angle) > 2.0:  # Dead zone for small angles
-                # Calculate integral term (with very tight limits)
-                roll_integral += roll_angle * DT
-                roll_integral = max(-5.0, min(5.0, roll_integral))  # Very tight integral windup
-                
-                # PID aileron command calculation
-                aileron_cmd = -(kp_roll * roll_angle + kd_roll * filtered_roll_rate + ki_roll * roll_integral)
-            else:
-                # No correction for small angles - let natural stability handle it
-                aileron_cmd = 0.0
-                roll_integral *= 0.99  # Slowly decay integral when not correcting
+            # Apply a low-pass filter to smooth the roll rate signal
+            # A small alpha value results in more smoothing.
+            alpha = 0.8
+            filtered_roll_rate_dps = (alpha * raw_roll_rate_dps) + ((1 - alpha) * filtered_roll_rate_dps)
+            filtered_roll_angle_deg = (alpha * roll_angle_deg) + ((1 - alpha) * filtered_roll_angle_deg)
+
+            # PD Controller gains, re-tuned for the smooth, filtered signal
+            kp_roll = 0.015  # Proportional gain
+            kd_roll = 0.12   # Derivative gain (acts on the filtered rate)
+
+            # Calculate the aileron command using the filtered rate
+            aileron_cmd = -(kp_roll * filtered_roll_angle_deg + kd_roll * filtered_roll_rate_dps)
             
-            # Add to rolling average buffer for even more smoothing
-            aileron_command_history.pop(0)  # Remove oldest
-            aileron_command_history.append(aileron_cmd)  # Add newest
-            
-            # Use rolling average of commands
-            aileron_cmd = sum(aileron_command_history) / len(aileron_command_history)
-            
-            # Multiple stages of low-pass filtering
-            aileron_filter = aileron_cmd * 0.1 + aileron_filter * 0.9  # Very heavy filtering
-            aileron_cmd = aileron_filter
-            
-            # Very conservative limits
-            aileron_cmd = max(-0.2, min(0.2, aileron_cmd))  # Much smaller limits
-            
-            # Rate limiting - prevent rapid changes
-            max_change = 0.01  # Maximum change per step
-            if aileron_cmd > last_aileron_cmd + max_change:
-                aileron_cmd = last_aileron_cmd + max_change
-            elif aileron_cmd < last_aileron_cmd - max_change:
-                aileron_cmd = last_aileron_cmd - max_change
-            
-            last_aileron_cmd = aileron_cmd  # Store for next iteration
-            
-            # Update state variables
-            previous_roll_rate = filtered_roll_rate
+            # Limit the command to a conservative range
+            aileron_cmd = max(-0.2, min(0.2, aileron_cmd))
             
             fdm['fcs/aileron-cmd-norm'] = aileron_cmd
-        
+            # ====================================================================
+            # === END OF REVISED LOGIC                                         ===
+            # ====================================================================
+
         # Run simulation step
         fdm.run()
         
-        # Collect data every 5 steps
+        # Collect data
         if step_count % 5 == 0:
             data['time'].append(sim_time)
             data['altitude'].append(current_altitude)
@@ -340,7 +295,7 @@ def run_simulation():
             data['phase'].append(current_phase)
         
         # Progress reporting
-        if step_count % 600 == 0:  # Every 5 seconds
+        if step_count % 600 == 0:
             print(f"[{sim_time:5.1f}s] {current_phase}: Alt={current_altitude:6.0f}ft, "
                   f"IAS={current_airspeed:5.1f}kts, HDG={fdm['attitude/psi-deg']:5.1f}°")
         
@@ -358,8 +313,7 @@ def create_plots(data):
     
     # Plot 1: Altitude profile
     axes[0,0].plot(times, data['altitude'], 'b-', linewidth=2)
-    axes[0,0].axhline(y=1000, color='g', linestyle='--', alpha=0.7, label='1000ft')
-    axes[0,0].axhline(y=2500, color='r', linestyle='--', alpha=0.7, label='Target Alt')
+    axes[0,0].axhline(y=5000, color='r', linestyle='--', alpha=0.7, label='Target Alt')
     axes[0,0].set_ylabel('Altitude (ft AGL)')
     axes[0,0].set_title('Altitude Profile')
     axes[0,0].grid(True, alpha=0.3)
@@ -368,7 +322,7 @@ def create_plots(data):
     # Plot 2: Airspeed
     axes[0,1].plot(times, data['airspeed'], 'r-', linewidth=2, label='IAS')
     axes[0,1].plot(times, data['groundspeed'], 'g-', linewidth=1, alpha=0.7, label='GS')
-    axes[0,1].axhline(y=150, color='orange', linestyle='--', alpha=0.7, label='Typical Vr')
+    axes[0,1].axhline(y=120, color='orange', linestyle='--', alpha=0.7, label='Rotation Speed')
     axes[0,1].set_ylabel('Speed (kts)')
     axes[0,1].set_title('Airspeed Profile')
     axes[0,1].grid(True, alpha=0.3)
@@ -382,20 +336,11 @@ def create_plots(data):
     axes[0,2].grid(True, alpha=0.3)
     axes[0,2].legend()
     
-    # Plot 4: Heading (convert from 0-360° to -180° to +180° range)
-    heading_converted = []
-    for h in data['heading']:
-        if h > 180:
-            heading_converted.append(h - 360)
-        else:
-            heading_converted.append(h)
-    
-    axes[1,0].plot(times, heading_converted, 'purple', linewidth=2)
+    # Plot 4: Heading
+    axes[1,0].plot(times, data['heading'], 'purple', linewidth=2)
     axes[1,0].set_ylabel('Heading (degrees)')
-    axes[1,0].set_title('Aircraft Heading (-180° to +180°)')
+    axes[1,0].set_title('Aircraft Heading')
     axes[1,0].grid(True, alpha=0.3)
-    axes[1,0].set_ylim(-180, 180)
-    axes[1,0].set_yticks([-180, -90, 0, 90, 180])
     
     # Plot 5: Engine throttles
     axes[1,1].plot(times, data['throttle_1'], 'g-', linewidth=2, label='Engine 1')
@@ -407,12 +352,12 @@ def create_plots(data):
     
     # Plot 6: Flight controls
     axes[1,2].plot(times, data['elevator'], 'b-', linewidth=2, label='Elevator')
-    axes[1,2].plot(times, data['aileron'], 'r-', linewidth=2, label='Aileron (Ultra-Stable)')
+    axes[1,2].plot(times, data['aileron'], 'r-', linewidth=2, label='Aileron (Filtered PD)')
     axes[1,2].plot(times, data['flaps'], 'brown', linewidth=1, alpha=0.7, label='Flaps')
     axes[1,2].axhline(y=0.2, color='red', linestyle='--', alpha=0.5, label='Aileron Limit')
     axes[1,2].axhline(y=-0.2, color='red', linestyle='--', alpha=0.5)
     axes[1,2].set_ylabel('Control Position')
-    axes[1,2].set_title('Flight Controls (with Ultra-Stable Roll Control)')
+    axes[1,2].set_title('Flight Controls (Filtered PD Control)')
     axes[1,2].grid(True, alpha=0.3)
     axes[1,2].legend()
     
@@ -425,93 +370,60 @@ def create_plots(data):
     axes[2,0].set_ylim(-0.1, 1.1)
     
     # Plot 8: Flight phases timeline
-    axes[2,1].scatter(times, [0]*len(times), c=range(len(times)), cmap='viridis', s=2)
+    phase_map = {p: i for i, p in enumerate(sorted(list(set(data['phase']))))}
+    phase_colors = [phase_map[p] for p in data['phase']]
+    axes[2,1].scatter(times, [0]*len(times), c=phase_colors, cmap='viridis', s=20, marker='|')
+    
     phase_changes = []
-    current_phase = data['phase'][0]
-    phase_start = times[0]
-    
-    for i, phase in enumerate(data['phase']):
-        if phase != current_phase or i == len(data['phase'])-1:
-            phase_changes.append((phase_start, times[i-1] if i > 0 else times[i], current_phase))
-            current_phase = phase
-            phase_start = times[i] if i < len(times) else times[-1]
-    
-    for i, (start, end, phase) in enumerate(phase_changes):
-        axes[2,1].axvspan(start, end, alpha=0.3, label=phase)
-        axes[2,1].text(start + (end-start)/2, 0, phase, rotation=45, ha='center', va='bottom')
+    if data['phase']:
+        current_phase = data['phase'][0]
+        phase_start = times[0]
+        for i, phase in enumerate(data['phase']):
+            if phase != current_phase:
+                phase_changes.append({'start': phase_start, 'end': times[i-1], 'label': current_phase})
+                current_phase = phase
+                phase_start = times[i]
+        phase_changes.append({'start': phase_start, 'end': times[-1], 'label': current_phase})
+
+    for change in phase_changes:
+        axes[2,1].text((change['start'] + change['end']) / 2, 0.05, change['label'], rotation=45, ha='center', va='bottom', fontsize=9)
     
     axes[2,1].set_xlabel('Time (seconds)')
-    axes[2,1].set_ylabel('Flight Phase')
+    axes[2,1].set_yticks([])
     axes[2,1].set_title('Flight Phase Timeline')
-    axes[2,1].grid(True, alpha=0.3)
     axes[2,1].set_ylim(-0.5, 0.5)
-    
+
     # Plot 9: Summary stats
     axes[2,2].axis('off')
-    stats_text = f"""Flight Summary:
-Total time: {times[-1]:.1f} seconds
-Max altitude: {max(data['altitude']):.0f} ft AGL
-Max airspeed: {max(data['airspeed']):.1f} kts
-Final altitude: {data['altitude'][-1]:.0f} ft AGL
-Final airspeed: {data['airspeed'][-1]:.1f} kts
-Final heading: {data['heading'][-1]:.0f}°
-
-Takeoff Performance:
-- Engines: Twin afterburning turbofans
-- Takeoff flaps: 30% deployed
-- Max throttle: 100% (both engines)
-- Climb performance: Military fighter"""
-    
-    axes[2,2].text(0.1, 0.9, stats_text, transform=axes[2,2].transAxes, 
+    stats_text = f"""**Flight Summary**
+    Total time: {times[-1]:.1f}s
+    Max altitude: {max(data['altitude']):.0f} ft
+    Max airspeed: {max(data['airspeed']):.1f} kts
+    Final altitude: {data['altitude'][-1]:.0f} ft
+    Final airspeed: {data['airspeed'][-1]:.1f} kts
+    Final heading: {data['heading'][-1]:.0f}°
+    """
+    axes[2,2].text(0.05, 0.95, stats_text, transform=axes[2,2].transAxes, 
                   fontsize=10, verticalalignment='top', fontfamily='monospace')
     
-    # Set common x-axis for time-based plots
-    for i in range(2):
-        for j in range(3):
-            if i < 2 or j < 2:  # Skip the text plot
-                axes[i,j].set_xlim(times[0], times[-1])
-                if i == 2 or (i == 1 and j == 2):  # Bottom row plots
-                    axes[i,j].set_xlabel('Time (seconds)')
-    
-    plt.tight_layout()
-    plt.savefig('f15_takeoff_flight_simulation.png', dpi=300, bbox_inches='tight')
+    # Set common x-axis labels
+    for ax in [axes[0,0], axes[0,1], axes[0,2], axes[1,0], axes[1,1], axes[1,2]]:
+        ax.set_xlabel('')
+    for ax in [axes[2,0], axes[2,1]]:
+        ax.set_xlabel('Time (seconds)')
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.savefig('f15_takeoff_flight_simulation_STABLE.png', dpi=300)
     plt.show()
-    
-    # Print detailed summary
-    print(f"\nDetailed Flight Summary:")
-    print(f"=" * 50)
-    print(f"Aircraft: F15 Eagle")
-    print(f"Total flight time: {times[-1]:.1f} seconds")
-    print(f"Maximum altitude: {max(data['altitude']):.0f} ft AGL")
-    print(f"Maximum airspeed: {max(data['airspeed']):.1f} kts")
-    print(f"Final altitude: {data['altitude'][-1]:.0f} ft AGL")
-    print(f"Final airspeed: {data['airspeed'][-1]:.1f} kts")
-    print(f"Final heading: {data['heading'][-1]:.0f}°")
-    
-    # Find takeoff time
-    airborne_time = None
-    for i, alt in enumerate(data['altitude']):
-        if alt > 50:  # 50 ft AGL
-            airborne_time = data['time'][i]
-            break
-    
-    if airborne_time:
-        print(f"Time to 50ft AGL: {airborne_time:.1f} seconds")
-        takeoff_speed = data['airspeed'][data['time'].index(airborne_time)]
-        print(f"Liftoff speed: {takeoff_speed:.1f} kts")
 
 if __name__ == "__main__":
     try:
-        # Run the simulation
         flight_data = run_simulation()
-        
-        # Create plots
-        create_plots(flight_data)
-        
-        print("\nF15 simulation completed successfully!")
-        print("Plot saved as 'f15_takeoff_flight_simulation.png'")
-        
+        if flight_data:
+            create_plots(flight_data)
+            print("\nF15 simulation completed successfully!")
+            print("Plot saved as 'f15_takeoff_flight_simulation_STABLE.png'")
     except Exception as e:
-        print(f"Error during simulation: {e}")
+        print(f"\nAn error occurred during simulation: {e}")
         import traceback
         traceback.print_exc()
