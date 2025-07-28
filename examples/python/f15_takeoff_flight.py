@@ -110,6 +110,10 @@ def run_simulation():
     aileron_filter = 0.0
     aileron_command_history = [0.0] * 10  # Rolling average buffer
     last_aileron_cmd = 0.0  # Track previous aileron command for rate limiting
+
+    # --- Altitude PID controller state ---
+    altitude_pid_integral = 0.0
+    altitude_pid_prev_error = 0.0
     
     print(f"\nStarting F15 simulation...")
     print("=" * 50)
@@ -200,31 +204,32 @@ def run_simulation():
                 target_altitude = 3000  # Initial climb target
                 target_airspeed = 250
             
-            # Altitude control with pitch attitude
+            # Altitude control using a PID controller
             altitude_error = target_altitude - current_altitude
             airspeed_error = target_airspeed - current_airspeed
-            
-            # Elevator control - pitch attitude for altitude control
-            if altitude_error > 700:
-                # Maintain climb
-                elevator_cmd = -0.3
-            elif altitude_error > 300:
-                # Slight climb
-                elevator_cmd = -0.1
-            elif altitude_error > -50:
-                # Leveling off
-                pitch_error = 2.0 - pitch_angle  # Allow slight positive pitch for stability
-                elevator_cmd = pitch_error * 0.01
-                
-                # Add altitude rate feedback to prevent oscillation
-                if altitude_rate > 500:  # Climbing too fast
-                    elevator_cmd += 0.05
-                elif altitude_rate < -500:  # Descending too fast
-                    elevator_cmd -= 0.05
-            else:
-                # Descent
-                elevator_cmd = 0.1
-            
+
+
+            # PID gains (tune as needed)
+            kp_alt = -0.0007  # Proportional gain
+            ki_alt = 0.00001  # Integral gain
+            kd_alt = -0.015  # Derivative gain
+
+            # PID calculations
+            altitude_pid_integral += altitude_error * DT
+            # Anti-windup
+            altitude_pid_integral = max(-2000, min(2000, altitude_pid_integral))
+            altitude_pid_derivative = (altitude_error - altitude_pid_prev_error) / DT
+
+            # PID output
+            elevator_cmd = (
+                kp_alt * altitude_error
+                + ki_alt * altitude_pid_integral
+                + kd_alt * (-altitude_rate)  # Use negative altitude rate as derivative
+            )
+
+            # Save for next iteration
+            altitude_pid_prev_error = altitude_error
+
             # Limit elevator command
             elevator_cmd = max(-0.6, min(0.3, elevator_cmd))
             fdm['fcs/elevator-cmd-norm'] = elevator_cmd
