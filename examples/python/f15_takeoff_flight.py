@@ -267,10 +267,10 @@ def run_simulation():
             filtered_roll_rate = roll_rate * 0.05 + previous_roll_rate * 0.95
             
             # Very conservative PID control parameters for maximum stability
-            kp_roll = 0.005  # Very low proportional gain
+            kp_roll = 0.001  # Very low proportional gain
             kd_roll = 0.001  # Very low derivative gain
-            ki_roll = 0.0002  # Very low integral gain
-            
+            ki_roll = 0.002  # Very low integral gain
+
             # Only apply control for significant roll angles to avoid over-correction
             if abs(roll_angle) > 2.0:  # Dead zone for small angles
                 # Calculate integral term (with very tight limits)
