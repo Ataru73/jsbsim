@@ -76,6 +76,7 @@ def run_simulation():
         'throttle_1': [],
         'throttle_2': [],
         'elevator': [],
+        'aileron': [],
         'flaps': [],
         'gear': [],
         'phase': []
@@ -93,7 +94,7 @@ def run_simulation():
     current_phase = PHASE_STARTUP
     
     # Simulation parameters
-    simulation_time = 120.0  # 2 minutes
+    simulation_time = 300.0  # 5 minutes
     step_count = 0
     
     # Flight state tracking
@@ -102,6 +103,11 @@ def run_simulation():
     airborne = False
     gear_retracted = False
     flaps_retracted = False
+    
+    # Control system state variables for stability
+    previous_roll_angle = 0.0
+    roll_integral = 0.0
+    aileron_filter = 0.0
     
     print(f"\nStarting F15 simulation...")
     print("=" * 50)
@@ -283,6 +289,7 @@ def run_simulation():
             data['throttle_1'].append(fdm['fcs/throttle-cmd-norm[0]'])
             data['throttle_2'].append(fdm['fcs/throttle-cmd-norm[1]'])
             data['elevator'].append(fdm['fcs/elevator-cmd-norm'])
+            data['aileron'].append(fdm['fcs/aileron-cmd-norm'])
             data['flaps'].append(fdm['fcs/flap-cmd-norm'])
             data['gear'].append(fdm['gear/gear-cmd-norm'])
             data['phase'].append(current_phase)
@@ -346,9 +353,12 @@ def create_plots(data):
     
     # Plot 6: Flight controls
     axes[1,2].plot(times, data['elevator'], 'b-', linewidth=2, label='Elevator')
-    axes[1,2].plot(times, data['flaps'], 'brown', linewidth=1, label='Flaps')
+    axes[1,2].plot(times, data['aileron'], 'r-', linewidth=2, label='Aileron')
+    axes[1,2].plot(times, data['flaps'], 'brown', linewidth=1, alpha=0.7, label='Flaps')
+    axes[1,2].axhline(y=0.8, color='red', linestyle='--', alpha=0.5, label='Aileron Limit')
+    axes[1,2].axhline(y=-0.8, color='red', linestyle='--', alpha=0.5)
     axes[1,2].set_ylabel('Control Position')
-    axes[1,2].set_title('Flight Controls')
+    axes[1,2].set_title('Flight Controls (with Enhanced Roll Stability)')
     axes[1,2].grid(True, alpha=0.3)
     axes[1,2].legend()
     
