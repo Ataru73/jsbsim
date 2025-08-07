@@ -51,112 +51,88 @@ def initialize_f15():
     print(f"Aircraft initialized: {AIRCRAFT_NAME}")
     return fdm
 
+class F15AutoPilot:
+    def __init__(self, fdm):
+        self.fdm = fdm
+        self.engines_started = False
+        self.takeoff_roll_started = False
+        self.airborne = False
+        self.gear_retracted = False
+        self.altitude_pid_integral = 0.0
+        self.filtered_roll_rate_dps = 0.0
+        self.roll_integral = 0.0
+        
+    def execute_takeoff_sequence(self, sim_time):
+        if sim_time >= 0.1:
+            self.fdm['fcs/flap-cmd-norm'] = 0.3
+        if sim_time >= 0.2:
+            self.fdm['fcs/left-brake-cmd-norm'] = 0.0
+            self.fdm['fcs/right-brake-cmd-norm'] = 0.0
+        if sim_time >= 0.3:
+            self.fdm['propulsion/starter_cmd'] = 1 
+        if sim_time >= 0.4 and not self.engines_started:
+            self.fdm['propulsion/cutoff_cmd'] = 0
+            self.engines_started = True
+            print(f"[{sim_time:5.1f}s] Engines started.")
+        if sim_time >= 1.0 and not self.takeoff_roll_started:
+            self.fdm['fcs/throttle-cmd-norm[0]'] = 1.0
+            self.fdm['fcs/throttle-cmd-norm[1]'] = 1.0
+            self.takeoff_roll_started = True
+            print(f"[{sim_time:5.1f}s] Full throttle - takeoff roll.")
+        if self.takeoff_roll_started and not self.airborne and self.fdm['velocities/vc-kts'] > 120:
+            self.fdm['fcs/elevator-cmd-norm'] = -0.4
+        if self.takeoff_roll_started and not self.airborne and self.fdm['position/h-agl-ft'] > 20:
+            self.airborne = True
+            print(f"[{sim_time:5.1f}s] Airborne.")
+        if self.airborne and sim_time > 45.0 and not self.gear_retracted:
+            self.fdm['fcs/flap-cmd-norm'] = 0.0
+            self.fdm['gear/gear-cmd-norm'] = 0
+            self.gear_retracted = True
+            print(f"[{sim_time:5.1f}s] Gear and flaps retracted.")
+
+    def execute_in_flight_control(self, sim_time):
+        if self.airborne:
+            target_altitude, target_airspeed = (5000, 350) if sim_time >= 70.0 else (5000, 300)
+            altitude_error = target_altitude - self.fdm['position/h-agl-ft']
+            self.altitude_pid_integral += altitude_error * DT
+            self.altitude_pid_integral = max(-2000, min(2000, self.altitude_pid_integral))
+            elevator_cmd = -0.0007 * altitude_error + 0.00001 * self.altitude_pid_integral - 0.015 * (-self.fdm['velocities/h-dot-fps'])
+            self.fdm['fcs/elevator-cmd-norm'] = max(-0.6, min(0.3, elevator_cmd))
+            airspeed_error = target_airspeed - self.fdm['velocities/vc-kts']
+            throttle_cmd = 1.0 if altitude_error > 500 or airspeed_error > 25 else 0.75
+            self.fdm['fcs/throttle-cmd-norm[0]'] = throttle_cmd
+            self.fdm['fcs/throttle-cmd-norm[1]'] = throttle_cmd
+            roll_angle_deg = self.fdm['attitude/phi-deg']
+            raw_roll_rate_dps = self.fdm['velocities/p-rad_sec'] * 57.2958
+            alpha = 0.2
+            self.filtered_roll_rate_dps = (alpha * raw_roll_rate_dps) + ((1 - alpha) * self.filtered_roll_rate_dps)
+            self.roll_integral += roll_angle_deg * DT
+            self.roll_integral = max(-15.0, min(15.0, self.roll_integral))
+            kp_roll, ki_roll, kd_roll = 0.02, 0.004, 0.15
+            aileron_cmd = -(
+                (kp_roll * roll_angle_deg) +
+                (ki_roll * self.roll_integral) +
+                (kd_roll * self.filtered_roll_rate_dps)
+            )
+            self.fdm['fcs/aileron-cmd-norm'] = max(-0.25, min(0.25, aileron_cmd))
+
 def run_simulation():
     """Run the F15 takeoff and flight simulation"""
     fdm = initialize_f15()
-    
+    autopilot = F15AutoPilot(fdm)
+
     data = {
         'time': [], 'altitude': [], 'airspeed': [], 'roll': [], 'aileron': []
     }
+    simulation_time = 600.0
     
-    simulation_time = 300.0
-    
-    # --- State Tracking Flags (Restored to original working logic) ---
-    engines_started = False
-    takeoff_roll_started = False
-    airborne = False
-    gear_retracted = False
-    
-    # --- Controller State Variables ---
-    altitude_pid_integral = 0.0
-    filtered_roll_rate_dps = 0.0
-    roll_integral = 0.0
-
     print(f"\nStarting F15 simulation...")
     
     while fdm.get_sim_time() < simulation_time:
         sim_time = fdm.get_sim_time()
+        autopilot.execute_takeoff_sequence(sim_time)
+        autopilot.execute_in_flight_control(sim_time)
 
-        # --- Takeoff Sequence (Restored to original time-based logic) ---
-        if sim_time >= 0.1:
-            fdm['fcs/flap-cmd-norm'] = 0.3 # Deploy flaps
-            
-        if sim_time >= 0.2:
-            fdm['fcs/left-brake-cmd-norm'] = 0.0 # Release brakes
-            fdm['fcs/right-brake-cmd-norm'] = 0.0
-            
-        if sim_time >= 0.3:
-            fdm['propulsion/starter_cmd'] = 1 # Engage starter
-            
-        if sim_time >= 0.4 and not engines_started:
-            fdm['propulsion/cutoff_cmd'] = 0 # Introduce fuel
-            engines_started = True
-            print(f"[{sim_time:5.1f}s] Engines started.")
-            
-        if sim_time >= 1.0 and not takeoff_roll_started:
-            fdm['fcs/throttle-cmd-norm[0]'] = 1.0 # Full throttle
-            fdm['fcs/throttle-cmd-norm[1]'] = 1.0
-            takeoff_roll_started = True
-            print(f"[{sim_time:5.1f}s] Full throttle - takeoff roll.")
-            
-        if takeoff_roll_started and not airborne and fdm['velocities/vc-kts'] > 120:
-            fdm['fcs/elevator-cmd-norm'] = -0.4 # Rotate
-            
-        if takeoff_roll_started and not airborne and fdm['position/h-agl-ft'] > 20:
-            airborne = True
-            print(f"[{sim_time:5.1f}s] Airborne.")
-            
-        if airborne and fdm.get_sim_time() > 45.0 and not gear_retracted:
-            fdm['fcs/flap-cmd-norm'] = 0.0 # Retract flaps
-            fdm['gear/gear-cmd-norm'] = 0 # Retract gear
-            gear_retracted = True
-            print(f"[{sim_time:5.1f}s] Gear and flaps retracted.")
-
-        # --- In-Flight Control Logic ---
-        if airborne:
-            if sim_time >= 70.0:
-                target_altitude, target_airspeed = 5000, 350
-            else:
-                target_altitude, target_airspeed = 5000, 300
-            
-            # Altitude Controller
-            altitude_error = target_altitude - fdm['position/h-agl-ft']
-            altitude_pid_integral += altitude_error * DT
-            altitude_pid_integral = max(-2000, min(2000, altitude_pid_integral)) # Anti-windup
-            
-            elevator_cmd = -0.0007 * altitude_error + 0.00001 * altitude_pid_integral - 0.015 * (-fdm['velocities/h-dot-fps'])
-            fdm['fcs/elevator-cmd-norm'] = max(-0.6, min(0.3, elevator_cmd))
-            
-            # Speed Controller
-            airspeed_error = target_airspeed - fdm['velocities/vc-kts']
-            if altitude_error > 500 or airspeed_error > 25:
-                throttle_cmd = 1.0
-            else:
-                throttle_cmd = 0.75
-            fdm['fcs/throttle-cmd-norm[0]'] = throttle_cmd
-            fdm['fcs/throttle-cmd-norm[1]'] = throttle_cmd
-            
-            # --- Aileron Controller (Filtered PID for Roll Stability) ---
-            roll_angle_deg = fdm['attitude/phi-deg']
-            raw_roll_rate_dps = fdm['velocities/p-rad_sec'] * 57.2958
-
-            alpha = 0.2
-            filtered_roll_rate_dps = (alpha * raw_roll_rate_dps) + ((1 - alpha) * filtered_roll_rate_dps)
-
-            roll_integral += roll_angle_deg * DT
-            roll_integral = max(-15.0, min(15.0, roll_integral))
-
-            kp_roll, ki_roll, kd_roll = 0.02, 0.004, 0.15
-
-            aileron_cmd = -(
-                (kp_roll * roll_angle_deg) +
-                (ki_roll * roll_integral) +
-                (kd_roll * filtered_roll_rate_dps)
-            )
-            
-            fdm['fcs/aileron-cmd-norm'] = max(-0.25, min(0.25, aileron_cmd))
-
-        # --- Run Simulation Step and Collect Data ---
         fdm.run()
         
         data['time'].append(sim_time)
@@ -200,7 +176,7 @@ def create_plots(data):
     ax4.set_xlabel('Time (seconds)')
     ax4.grid(True, linestyle='--', alpha=0.6)
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.tight_layout(rect=(0, 0.03, 1, 0.95))
     plt.savefig('f15_takeoff_flight_simulation_STABLE.png', dpi=300)
     plt.show()
 
